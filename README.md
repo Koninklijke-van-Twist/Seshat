@@ -15,6 +15,19 @@ Pas de werksoortlijsten handmatig aan:
 Goedgekeurde timesheetregels worden permanent per week opgeslagen in `web/cache/seshat/`.
 Verhoog `SESHAT_CACHE_VERSION` in `web/seshat_config.php` om oudere cachebestanden automatisch te negeren.
 
+
+## Mímir (optioneel)
+
+Zet in `web/auth.php` (niet in git):
+
+```php
+$mimirApi  = 'mimir_…';
+// optioneel:
+$mimirBase = 'https://sleutels.kvt.nl/mimir/api';
+```
+
+Met `$mimirApi` gezet zijn `$auth_list`, `$environment`, `$baseUrl` en `$auth` ongebruikt voor Business Central — company-discovery en OData lopen via Mímir. Zonder `$mimirApi` blijft het bestaande BC-pad ongewijzigd.
+
 ## Starten
 
 De applicatie draait vanuit `web/` via `index.php`.

@@ -30,6 +30,27 @@ function auth_normalize_environment_list(mixed $value): array
     return $normalized;
 }
 
+
+/**
+ * Laadt odata.php indien nodig en checkt of Mímir actief is ($mimirApi gezet).
+ */
+function auth_ensure_odata_loaded(): void
+{
+    if (function_exists('odata_mimir_enabled')) {
+        return;
+    }
+    $odataPath = __DIR__ . '/odata.php';
+    if (is_file($odataPath)) {
+        require_once $odataPath;
+    }
+}
+
+function auth_mimir_enabled(): bool
+{
+    auth_ensure_odata_loaded();
+    return function_exists('odata_mimir_enabled') && odata_mimir_enabled();
+}
+
 /**
  * Geeft de actieve environments terug op basis van config.
  */
@@ -54,6 +75,38 @@ function auth_get_active_environments(): array
         return [(string) $known[0]];
     }
 
+    if ($configured !== []) {
+        return $configured;
+    }
+
+    // Geen lokale BC-config: bij Mímir environments afleiden uit companies.php.
+    if (auth_mimir_enabled()) {
+        $cached = $GLOBALS['demeter_active_environments'] ?? null;
+        if (is_array($cached) && $cached !== []) {
+            return array_values(array_map('strval', $cached));
+        }
+        try {
+            auth_ensure_odata_loaded();
+            if (!function_exists('odata_mimir_companies_as_rows')) {
+                return [];
+            }
+            $rows = odata_mimir_companies_as_rows(null);
+            $envs = [];
+            $seen = [];
+            foreach ($rows as $row) {
+                $env = trim((string) ($row['environment'] ?? ''));
+                if ($env === '' || isset($seen[$env])) {
+                    continue;
+                }
+                $seen[$env] = true;
+                $envs[] = $env;
+            }
+            return $envs;
+        } catch (Throwable $ignored) {
+            return [];
+        }
+    }
+
     return $configured;
 }
 
@@ -74,13 +127,21 @@ function auth_get_auth_for_environment(string $environment): array
     global $auth_list;
 
     $environmentKey = trim($environment);
+    $list = is_array($auth_list ?? null) ? $auth_list : [];
+
     if ($environmentKey === '') {
+        if (auth_mimir_enabled()) {
+            return [];
+        }
         throw new RuntimeException('Environment ontbreekt in auth-configuratie.');
     }
 
-    $list = is_array($auth_list ?? null) ? $auth_list : [];
     $auth = $list[$environmentKey] ?? null;
     if (!is_array($auth)) {
+        // Mímir-modus zonder BC-auth: leftover callers krijgen lege auth i.p.v. exception.
+        if (auth_mimir_enabled()) {
+            return [];
+        }
         throw new RuntimeException('Geen auth-configuratie gevonden voor environment: ' . $environmentKey);
     }
 
@@ -227,11 +288,129 @@ function auth_fetch_companies_for_environment_via_curl(string $url, array $auth)
     return is_array($rows) ? $rows : [];
 }
 
+
+/**
+ * Company-discovery via Mímir companies.php (geen BC auth_list/baseUrl).
+ */
+function auth_discover_companies_via_mimir(): array
+{
+    auth_ensure_odata_loaded();
+    if (!function_exists('odata_mimir_companies_as_rows')) {
+        throw new RuntimeException('Mímir company-discovery vereist odata.php.');
+    }
+
+    $rows = odata_mimir_companies_as_rows(null);
+    $companiesByEnvironment = [];
+    $companyToEnvironment = [];
+    $duplicates = [];
+
+    foreach ($rows as $row) {
+        $companyName = trim((string) ($row['Name'] ?? ''));
+        $environment = trim((string) ($row['environment'] ?? ''));
+        if ($companyName === '' || $environment === '') {
+            continue;
+        }
+
+        if (!isset($companiesByEnvironment[$environment])) {
+            $companiesByEnvironment[$environment] = [];
+        }
+        $companiesByEnvironment[$environment][] = $companyName;
+
+        $normalizedCompany = strtolower($companyName);
+        if (!isset($companyToEnvironment[$normalizedCompany])) {
+            $companyToEnvironment[$normalizedCompany] = [
+                'name' => $companyName,
+                'environment' => $environment,
+            ];
+            continue;
+        }
+
+        $existingEnvironment = (string) ($companyToEnvironment[$normalizedCompany]['environment'] ?? '');
+        if ($existingEnvironment === $environment) {
+            continue;
+        }
+
+        if (!isset($duplicates[$normalizedCompany])) {
+            $duplicates[$normalizedCompany] = [
+                'name' => (string) ($companyToEnvironment[$normalizedCompany]['name'] ?? $companyName),
+                'environments' => [$existingEnvironment],
+            ];
+        }
+        $duplicates[$normalizedCompany]['environments'][] = $environment;
+    }
+
+    if ($duplicates !== []) {
+        $duplicateMessages = [];
+        foreach ($duplicates as $duplicate) {
+            $name = trim((string) ($duplicate['name'] ?? 'onbekend'));
+            $envs = is_array($duplicate['environments'] ?? null) ? $duplicate['environments'] : [];
+            $envs = array_values(array_unique(array_filter(array_map('strval', $envs), static function (string $env): bool {
+                return trim($env) !== '';
+            })));
+            sort($envs, SORT_NATURAL | SORT_FLAG_CASE);
+            $duplicateMessages[] = $name . ' [' . implode(', ', $envs) . ']';
+        }
+        throw new RuntimeException(
+            'Bedrijfsnaam-overlap tussen Mímir-environments. Conflicten: '
+            . implode('; ', $duplicateMessages)
+        );
+    }
+
+    foreach ($companiesByEnvironment as $env => $list) {
+        $unique = [];
+        $seen = [];
+        foreach ($list as $companyName) {
+            $key = strtolower(trim((string) $companyName));
+            if ($key === '' || isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $unique[] = (string) $companyName;
+        }
+        natcasesort($unique);
+        $companiesByEnvironment[$env] = array_values($unique);
+    }
+
+    $map = [];
+    foreach ($companyToEnvironment as $item) {
+        $name = trim((string) ($item['name'] ?? ''));
+        $environment = trim((string) ($item['environment'] ?? ''));
+        if ($name === '' || $environment === '') {
+            continue;
+        }
+        $map[$name] = $environment;
+    }
+    ksort($map, SORT_NATURAL | SORT_FLAG_CASE);
+
+    $activeEnvironments = array_keys($companiesByEnvironment);
+    sort($activeEnvironments, SORT_NATURAL | SORT_FLAG_CASE);
+
+    $result = [
+        'companies' => array_keys($map),
+        'map' => $map,
+        'by_environment' => $companiesByEnvironment,
+        'errors' => [],
+        'active_environments' => $activeEnvironments,
+        'primary_environment' => (string) ($activeEnvironments[0] ?? ''),
+    ];
+
+    $GLOBALS['demeter_company_environment_map'] = $map;
+    $GLOBALS['demeter_companies_by_environment'] = $companiesByEnvironment;
+    $GLOBALS['demeter_active_environments'] = $activeEnvironments;
+
+    return $result;
+}
+
 /**
  * Ontdekt bedrijven over alle actieve environments en bouwt de map.
  */
 function auth_discover_companies_across_active_environments(int $ttlSeconds = 300): array
 {
+    // Mímir: companies + environments uit Mímir API — geen $auth_list/$baseUrl nodig.
+    if (auth_mimir_enabled()) {
+        return auth_discover_companies_via_mimir();
+    }
+
     $activeEnvironments = auth_get_active_environments();
     if ($activeEnvironments === []) {
         throw new RuntimeException('Geen actieve environments geconfigureerd.');
@@ -388,6 +567,38 @@ function auth_set_current_company_context(?string $company, int $ttlSeconds = 30
     global $environment, $auth;
 
     $companyName = trim((string) $company);
+
+    if (auth_mimir_enabled()) {
+        $targetEnvironment = '';
+        if ($companyName !== '') {
+            try {
+                $targetEnvironment = auth_get_environment_for_company($companyName, $ttlSeconds);
+            } catch (Throwable $ignored) {
+                $targetEnvironment = auth_get_primary_environment();
+            }
+        } else {
+            $targetEnvironment = auth_get_primary_environment();
+        }
+
+        // BC-auth alleen als lokaal geconfigureerd; anders lege sentinel.
+        $targetAuth = [];
+        if ($targetEnvironment !== '') {
+            global $auth_list;
+            $list = is_array($auth_list ?? null) ? $auth_list : [];
+            if (isset($list[$targetEnvironment]) && is_array($list[$targetEnvironment])) {
+                $targetAuth = $list[$targetEnvironment];
+            }
+        }
+
+        $environment = $targetEnvironment;
+        $auth = $targetAuth;
+
+        return [
+            'environment' => $targetEnvironment,
+            'auth' => $targetAuth,
+        ];
+    }
+
     if ($companyName === '') {
         $targetEnvironment = auth_get_primary_environment();
     } else {

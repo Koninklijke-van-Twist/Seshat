@@ -20,7 +20,10 @@ function consolelog($text)
 
 /**
  * Mímir-proxy: als $mimirApi in auth.php staat, gaan alle OData-fetches
- * (nightly/hourly/on-demand via odata_get_all) naar Mímir i.p.v. BC.
+ * (nightly/hourly/on-demand via odata_get_all / bc_fetch_rows) naar Mímir i.p.v. BC.
+ *
+ * Met $mimirApi gezet zijn $auth_list / $environment / $baseUrl / $auth ongebruikt voor BC;
+ * Mímir beheert environments — Seshat heeft alleen de API-key (+ optioneel $mimirBase) nodig.
  *
  * Tim moet in web/auth.php zetten (niet in git):
  *   $mimirApi  = 'mimir_…';              // verplicht om Mímir te activeren
@@ -34,6 +37,11 @@ function odata_mimir_api_key(): string
         return '';
     }
     return trim($mimirApi);
+}
+
+function odata_mimir_enabled(): bool
+{
+    return odata_mimir_api_key() !== '';
 }
 
 function odata_mimir_base_url(): string
@@ -178,6 +186,99 @@ function odata_mimir_companies_as_rows(?string $environment = null): array
 }
 
 /**
+ * Bedrijfsnamen via Mímir companies.php (gesorteerd).
+ *
+ * @return list<string>
+ */
+function odata_mimir_list_companies(?string $environment = null): array
+{
+    $rows = odata_mimir_companies_as_rows($environment);
+    $names = [];
+    $seen = [];
+    foreach ($rows as $row) {
+        $name = trim((string) ($row['Name'] ?? ''));
+        if ($name === '') {
+            continue;
+        }
+        $key = strtolower($name);
+        if (isset($seen[$key])) {
+            continue;
+        }
+        $seen[$key] = true;
+        $names[] = $name;
+    }
+    natcasesort($names);
+    return array_values($names);
+}
+
+/**
+ * name => environment map uit Mímir companies.php.
+ *
+ * @return array<string, string>
+ */
+function odata_mimir_company_environment_map(?string $environment = null): array
+{
+    $rows = odata_mimir_companies_as_rows($environment);
+    $map = [];
+    foreach ($rows as $row) {
+        $name = trim((string) ($row['Name'] ?? ''));
+        $env = trim((string) ($row['environment'] ?? ''));
+        if ($name === '' || $env === '') {
+            continue;
+        }
+        $map[$name] = $env;
+    }
+    ksort($map, SORT_NATURAL | SORT_FLAG_CASE);
+    return $map;
+}
+
+/**
+ * Directe company/table-query via Mímir — geen BC-URL nodig.
+ * $odataQuery gebruikt Seshat-keys zoals $select / $filter.
+ *
+ * @param array<string, mixed> $odataQuery
+ * @return list<array<string, mixed>>
+ */
+function odata_mimir_query(string $company, string $table, array $odataQuery, int $ttlSeconds): array
+{
+    consolelog("Mímir query company=$company table=$table\n");
+
+    $body = [
+        'company' => $company,
+        'table' => $table,
+        'max_age' => max(0, $ttlSeconds),
+        'top' => 0,
+    ];
+
+    $select = trim((string) ($odataQuery['$select'] ?? $odataQuery['select'] ?? ''));
+    if ($select !== '') {
+        $cols = [];
+        foreach (explode(',', $select) as $col) {
+            $col = trim($col);
+            if ($col !== '') {
+                $cols[] = $col;
+            }
+        }
+        if ($cols !== []) {
+            $body['select'] = $cols;
+        }
+    }
+
+    $filter = trim((string) ($odataQuery['$filter'] ?? $odataQuery['filter'] ?? ''));
+    if ($filter !== '') {
+        $body['filter'] = $filter;
+    }
+
+    $response = odata_mimir_request('POST', 'query.php', $body);
+    if (!isset($response['value']) || !is_array($response['value'])) {
+        throw new Exception("Mímir query-antwoord mist 'value'.");
+    }
+    /** @var list<array<string, mixed>> $value */
+    $value = $response['value'];
+    return $value;
+}
+
+/**
  * @return list<array<string, mixed>>
  */
 function odata_mimir_fetch_all(string $url, int $ttlSeconds): array
@@ -194,39 +295,7 @@ function odata_mimir_fetch_all(string $url, int $ttlSeconds): array
         throw new Exception('Mímir: OData-URL kon niet worden vertaald naar company/table: ' . $url);
     }
 
-    $body = [
-        'company' => $parsed['company'],
-        'table' => $parsed['entity'],
-        'max_age' => max(0, $ttlSeconds),
-        'top' => 0,
-    ];
-
-    $select = trim((string) ($parsed['query']['$select'] ?? ''));
-    if ($select !== '') {
-        $cols = [];
-        foreach (explode(',', $select) as $col) {
-            $col = trim($col);
-            if ($col !== '') {
-                $cols[] = $col;
-            }
-        }
-        if ($cols !== []) {
-            $body['select'] = $cols;
-        }
-    }
-
-    $filter = trim((string) ($parsed['query']['$filter'] ?? ''));
-    if ($filter !== '') {
-        $body['filter'] = $filter;
-    }
-
-    $response = odata_mimir_request('POST', 'query.php', $body);
-    if (!isset($response['value']) || !is_array($response['value'])) {
-        throw new Exception("Mímir query-antwoord mist 'value'.");
-    }
-    /** @var list<array<string, mixed>> $value */
-    $value = $response['value'];
-    return $value;
+    return odata_mimir_query($parsed['company'], $parsed['entity'], $parsed['query'], $ttlSeconds);
 }
 
 function odata_get_all(string $url, array $auth, $ttlSeconds = 300): array
