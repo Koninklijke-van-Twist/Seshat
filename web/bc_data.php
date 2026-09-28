@@ -52,7 +52,14 @@ function bc_fetch_rows(string $company, string $entitySet, array $query, int $tt
 
     $environment = auth_get_environment_for_company($company, $ttl);
     $auth = auth_get_auth_for_environment($environment);
-    $url = bc_company_entity_url($baseUrl, $environment, $company, $entitySet, $query);
+    $resolvedBase = is_string($baseUrl) ? $baseUrl : '';
+    if (function_exists('odata_bc_base_url')) {
+        $fromConfig = odata_bc_base_url();
+        if (is_string($fromConfig) && $fromConfig !== '') {
+            $resolvedBase = $fromConfig;
+        }
+    }
+    $url = bc_company_entity_url($resolvedBase, $environment, $company, $entitySet, $query);
 
     return odata_get_all($url, $auth, $ttl);
 }
