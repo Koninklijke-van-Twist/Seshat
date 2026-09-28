@@ -79,8 +79,14 @@ function auth_get_active_environments(): array
     $known = is_array($auth_list ?? null) ? array_keys($auth_list) : [];
     if ($configured !== []) {
         $knownMap = array_fill_keys($known, true);
-        $configured = array_values(array_filter($configured, static function (string $item) use ($knownMap): bool {
-            return isset($knownMap[$item]);
+        // Tijdens de BC-fallback blijft het primaire environment staan, ook zonder
+        // eigen $auth_list-entry. Zolang Mímir de bron is verandert dit filter niet.
+        $allowPrimaryAuth = !auth_mimir_enabled() && function_exists('odata_bc_auth_for_named_environment');
+        $configured = array_values(array_filter($configured, static function (string $item) use ($knownMap, $allowPrimaryAuth): bool {
+            if (isset($knownMap[$item])) {
+                return true;
+            }
+            return $allowPrimaryAuth && odata_bc_auth_for_named_environment($item, []) !== null;
         }));
     }
 
@@ -90,6 +96,18 @@ function auth_get_active_environments(): array
 
     if ($configured !== []) {
         return $configured;
+    }
+
+    // Fallback: alleen $environment + $auth, zonder $auth_list. Niet terwijl Mímir
+    // nog de bron is; dan blijven environments uit companies.php komen.
+    if ($known === [] && !auth_mimir_enabled()) {
+        $fromEnvironment = isset($environment) ? auth_normalize_environment_list($environment) : [];
+        $fromEnvironment = array_values(array_filter($fromEnvironment, static function (string $item): bool {
+            return strcasecmp($item, 'mimir') !== 0;
+        }));
+        if ($fromEnvironment !== []) {
+            return $fromEnvironment;
+        }
     }
 
     // Geen lokale BC-config: bij Mímir environments afleiden uit companies.php.
@@ -156,6 +174,12 @@ function auth_get_auth_for_environment(string $environment): array
         if (auth_mimir_enabled() && !auth_bc_credentials_configured()) {
             return [];
         }
+        if (function_exists('odata_bc_auth_for_named_environment')) {
+            $fallbackAuth = odata_bc_auth_for_named_environment($environmentKey, []);
+            if (is_array($fallbackAuth)) {
+                return $fallbackAuth;
+            }
+        }
         throw new RuntimeException('Geen auth-configuratie gevonden voor environment: ' . $environmentKey);
     }
 
@@ -182,8 +206,17 @@ function auth_build_companies_urls(string $environment): array
 {
     global $baseUrl;
 
-    $base = trim((string) ($baseUrl ?? ''));
+    $base = '';
+    if (function_exists('odata_bc_base_url')) {
+        $resolved = odata_bc_base_url();
+        if (is_string($resolved) && trim($resolved) !== '') {
+            $base = trim($resolved);
+        }
+    }
     if ($base === '') {
+        $base = trim((string) ($baseUrl ?? ''));
+    }
+    if ($base === '' || stripos($base, 'mimir.invalid') !== false) {
         throw new RuntimeException('baseUrl ontbreekt in auth-configuratie.');
     }
 
@@ -605,8 +638,14 @@ function auth_set_current_company_context(?string $company, int $ttlSeconds = 30
             }
         }
 
+        // Lege sentinel voor Mímir. Een bruikbare $auth blijft staan, anders
+        // kan de directe BC-fallback die credentials niet meer gebruiken.
+        $keptAuth = $auth;
         $environment = $targetEnvironment;
         $auth = $targetAuth;
+        if ($targetAuth === [] && function_exists('odata_auth_is_usable') && odata_auth_is_usable($keptAuth)) {
+            $auth = $keptAuth;
+        }
 
         return [
             'environment' => $targetEnvironment,
