@@ -18,15 +18,22 @@ Verhoog `SESHAT_CACHE_VERSION` in `web/seshat_config.php` om oudere cachebestand
 
 ## Mímir (optioneel)
 
-Zet in `web/auth.php` (niet in git):
+Zet in `web/auth.php` (niet in git). De Business Central-credentials blijven naast `$mimirApi` staan; die zijn de automatische fallback als Mímir uitvalt.
 
 ```php
 $mimirApi  = 'mimir_…';
 // optioneel:
 $mimirBase = 'https://sleutels.kvt.nl/mimir/api';
+
+$auth_list = [
+    'Production' => ['mode' => 'basic', 'user' => '…', 'pass' => '…'],
+];
+$environment = 'Production';
+$auth = $auth_list[$environment];
+$baseUrl = 'https://example:7148/';
 ```
 
-Met `$mimirApi` gezet zijn `$auth_list`, `$environment`, `$baseUrl` en `$auth` ongebruikt voor Business Central — company-discovery en OData lopen via Mímir. Zonder `$mimirApi` blijft het bestaande BC-pad ongewijzigd.
+Met `$mimirApi` gezet proberen company-discovery en OData eerst Mímir. Faalt die aanroep (verbinding/timeout, non-2xx, ongeldige JSON of een Mímir-foutpayload), dan haalt Seshat dezelfde gegevens op via het directe Business Central-pad (`$baseUrl`, `$auth` / `$auth_list`, `$environment`, lokale odata-filecache) en slaat Mímir voor de rest van dat PHP-verzoek over. Dat geldt voor de webpagina (`index.php`) en voor CLI/cron die `odata_get_all` of `bc_fetch_rows` gebruiken; CLI houdt de lange timeout, webverzoeken ongeveer 90 seconden. Ontbreken de BC-credentials, dan komt de oorspronkelijke Mímir-fout terug. Zonder `$mimirApi` blijft het bestaande BC-pad ongewijzigd.
 
 ## Starten
 

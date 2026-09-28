@@ -30,9 +30,22 @@ function bc_company_entity_url(string $baseUrl, string $environment, string $com
 
 function bc_fetch_rows(string $company, string $entitySet, array $query, int $ttl = 3600): array
 {
-    // Mímir-modus: geen environment / auth / baseUrl nodig.
-    if (odata_mimir_enabled()) {
+    $mimirFirst = odata_mimir_enabled()
+        && !(function_exists('odata_mimir_circuit_open') && odata_mimir_circuit_open());
+    if ($mimirFirst) {
         return odata_mimir_query($company, $entitySet, $query, $ttl === 0 ? 3600 : $ttl);
+    }
+
+    if (odata_mimir_enabled()
+        && function_exists('odata_mimir_circuit_open')
+        && odata_mimir_circuit_open()
+        && !(function_exists('odata_bc_credentials_configured') && odata_bc_credentials_configured())
+    ) {
+        $previous = function_exists('odata_mimir_last_error') ? odata_mimir_last_error() : null;
+        if ($previous instanceof Throwable) {
+            throw $previous;
+        }
+        throw new Exception('Mímir mislukt.');
     }
 
     global $baseUrl;
@@ -65,7 +78,9 @@ function bc_default_companies(): array
 function bc_companies_for_page(int $ttl = 3600): array
 {
     try {
-        if (odata_mimir_enabled()) {
+        $mimirFirst = odata_mimir_enabled()
+            && !(function_exists('odata_mimir_circuit_open') && odata_mimir_circuit_open());
+        if ($mimirFirst) {
             $companies = odata_mimir_list_companies(null);
             // Vul demeter_* globals / map voor eventuele callers.
             try {

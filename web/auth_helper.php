@@ -48,7 +48,20 @@ function auth_ensure_odata_loaded(): void
 function auth_mimir_enabled(): bool
 {
     auth_ensure_odata_loaded();
-    return function_exists('odata_mimir_enabled') && odata_mimir_enabled();
+    if (!function_exists('odata_mimir_enabled') || !odata_mimir_enabled()) {
+        return false;
+    }
+    // Na de eerste Mímir-fout in dit proces weer het directe BC-pad gebruiken.
+    if (function_exists('odata_mimir_circuit_open') && odata_mimir_circuit_open()) {
+        return false;
+    }
+    return true;
+}
+
+function auth_bc_credentials_configured(): bool
+{
+    auth_ensure_odata_loaded();
+    return function_exists('odata_bc_credentials_configured') && odata_bc_credentials_configured();
 }
 
 /**
@@ -130,7 +143,7 @@ function auth_get_auth_for_environment(string $environment): array
     $list = is_array($auth_list ?? null) ? $auth_list : [];
 
     if ($environmentKey === '') {
-        if (auth_mimir_enabled()) {
+        if (auth_mimir_enabled() && !auth_bc_credentials_configured()) {
             return [];
         }
         throw new RuntimeException('Environment ontbreekt in auth-configuratie.');
@@ -138,8 +151,9 @@ function auth_get_auth_for_environment(string $environment): array
 
     $auth = $list[$environmentKey] ?? null;
     if (!is_array($auth)) {
-        // Mímir-modus zonder BC-auth: leftover callers krijgen lege auth i.p.v. exception.
-        if (auth_mimir_enabled()) {
+        // Alleen zonder lokale BC-credentials mag Mímir een lege auth teruggeven.
+        // Staan de credentials er wel, dan blijven ze beschikbaar voor de directe fallback.
+        if (auth_mimir_enabled() && !auth_bc_credentials_configured()) {
             return [];
         }
         throw new RuntimeException('Geen auth-configuratie gevonden voor environment: ' . $environmentKey);
@@ -568,7 +582,8 @@ function auth_set_current_company_context(?string $company, int $ttlSeconds = 30
 
     $companyName = trim((string) $company);
 
-    if (auth_mimir_enabled()) {
+    // BC-auth opzetten zodra die geconfigureerd is, ook als Mímir aan staat.
+    if (auth_mimir_enabled() && !auth_bc_credentials_configured()) {
         $targetEnvironment = '';
         if ($companyName !== '') {
             try {
