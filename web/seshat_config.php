@@ -5,8 +5,8 @@
  */
 const SESHAT_CACHE_VERSION = 1;
 
-const SESHAT_LINES_SELECT = 'Time_Sheet_No,Line_No,Header_Resource_No,Header_Starting_Date,Header_Ending_Date,Type,Status,Description,Job_No,Job_Task_No,Work_Type_Code,Service_Order_No,Field1,Field2,Field3,Field4,Field5,Field6,Field7,Total_Quantity';
-const SESHAT_HEADERS_SELECT = 'No,Starting_Date,Ending_Date,Resource_No,LVS_Resource_Name,Resource_Name,Quantity_Approved';
+const SESHAT_LINES_SELECT = 'Time_Sheet_No,Header_Resource_No,Header_Starting_Date,Job_No,Work_Type_Code,Service_Order_No,Field1,Field2,Field3,Field4,Field5,Field6,Field7,Total_Quantity';
+const SESHAT_HEADERS_SELECT = 'No,Resource_No,LVS_Resource_Name,Resource_Name';
 const SESHAT_RESOURCES_SELECT = 'No,Name';
 
 /**
