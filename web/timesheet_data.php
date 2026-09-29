@@ -196,16 +196,31 @@ function seshat_approved_status_filter(): string
     return '(' . implode(' or ', $values) . ')';
 }
 
+function seshat_odata_error_is_empty_lines(Throwable $error): bool
+{
+    return str_contains(strtolower($error->getMessage()), 'geen urenstaatregels');
+}
+
 function seshat_fetch_week_lines_from_bc(string $company, string $weekStart, string $weekEnd): array
 {
     $filter = seshat_approved_status_filter()
         . " and Header_Starting_Date ge " . $weekStart
         . " and Header_Starting_Date le " . $weekEnd;
 
-    $rows = bc_fetch_rows($company, 'Urenstaatregels', [
-        '$select' => SESHAT_LINES_SELECT,
-        '$filter' => $filter,
-    ], 300);
+    try {
+        $rows = bc_fetch_rows($company, 'Urenstaatregels', [
+            '$select' => SESHAT_LINES_SELECT,
+            '$filter' => $filter,
+        ], 300);
+    } catch (Throwable $error) {
+        // Mímir logt HTTP 400 "geen urenstaatregels" als een week geen goedgekeurde
+        // regels heeft. bc_fetch_rows heeft de BC-fallback dan al geprobeerd.
+        // Een lege week mag de rest van het datumbereik niet laten mislukken.
+        if (seshat_odata_error_is_empty_lines($error)) {
+            return [];
+        }
+        throw $error;
+    }
 
     return array_map('seshat_normalize_line_row', $rows);
 }
