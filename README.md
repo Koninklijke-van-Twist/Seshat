@@ -35,6 +35,10 @@ $baseUrl = 'https://example:7148/';
 
 Met `$mimirApi` gezet proberen company-discovery en OData eerst Mímir. Faalt die aanroep (verbinding/timeout, non-2xx, ongeldige JSON of een Mímir-foutpayload), dan haalt Seshat dezelfde gegevens op via het directe Business Central-pad (`$baseUrl`, `$auth` / `$auth_list`, `$environment`, lokale odata-filecache) en slaat Mímir voor de rest van dat PHP-verzoek over. Dat geldt voor de webpagina (`index.php`) en voor CLI/cron die `odata_get_all` of `bc_fetch_rows` gebruiken; CLI houdt de lange timeout, webverzoeken ongeveer 90 seconden. Ontbreken de BC-credentials, dan komt de oorspronkelijke Mímir-fout terug. Zonder `$mimirApi` blijft het bestaande BC-pad ongewijzigd.
 
+## Analytics
+
+`web/analytics/analytics.sqlite` (en `*.sqlite-*`) blijft op de server staan bij een deploy: de FTP-mirror slaat die bestanden al over. Dezelfde mirror slaat `.htaccess` over, dus een gecommit bestand komt niet mee en een bestaand bestand wordt niet gewist. `analytics.php` schrijft `web/analytics/.htaccess` als die ontbreekt (of vult hem aan als het woord `sqlite` er nog niet in staat), zodat Apache de database weigert en `analytics.php` zelf bereikbaar blijft.
+
 ## Starten
 
 De applicatie draait vanuit `web/` via `index.php`.
