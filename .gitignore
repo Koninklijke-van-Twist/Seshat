@@ -10,3 +10,4 @@ data/user_prefs/
 
 web/analytics/analytics.sqlite
 web/analytics/analytics.sqlite-*
+web/analytics/.htaccess
